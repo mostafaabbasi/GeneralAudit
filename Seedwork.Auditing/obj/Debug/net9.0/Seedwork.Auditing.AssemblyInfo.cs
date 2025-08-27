@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Seedwork.Auditing")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a95b852be717584337efa10ac6e79c90bca29e33")]
 [assembly: System.Reflection.AssemblyProductAttribute("Seedwork.Auditing")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Seedwork.Auditing")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

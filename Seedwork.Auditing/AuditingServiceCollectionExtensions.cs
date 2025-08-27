@@ -7,12 +7,16 @@ namespace Seedwork.Auditing;
 
 public static class AuditingServiceCollectionExtensions
 {
-    public static IServiceCollection AddSchemaAwareAuditing(this IServiceCollection services)
+    public static IServiceCollection AddSchemaAwareAuditing(this IServiceCollection services, Action<AuditPropertyIgnoreConfiguration>? configureIgnores = null)
     {
         services.AddSingleton<SchemaDetectionService>();
         services.AddScoped<IAuditStore, SchemaAwareAuditStore>();
         services.AddScoped<IAuditQueryService, AuditQueryService>();
         services.AddScoped<AuditingInterceptor>();
+        
+        var ignoreConfig = new AuditPropertyIgnoreConfiguration();
+        configureIgnores?.Invoke(ignoreConfig);
+        services.AddSingleton(ignoreConfig);
         
         return services;
     }

@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
@@ -12,7 +13,8 @@ namespace Seedwork.Auditing.Core;
 public sealed class AuditingInterceptor(
     SchemaDetectionService schemaService,
     IAuditStore auditStore,
-    IServiceProvider serviceProvider)
+    IServiceProvider serviceProvider,
+    AuditPropertyIgnoreConfiguration ignoreConfiguration)
     : SaveChangesInterceptor
 {
     public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
@@ -51,6 +53,9 @@ public sealed class AuditingInterceptor(
                 entry.State == EntityState.Unchanged)
                 continue;
             
+            if (ignoreConfiguration.ShouldIgnoreEntity(entry.Entity))
+                continue;
+            
             var auditEntry = CreateAuditEntryFromEntityEntry(entry, userId, userEmail);
             if (auditEntry != null)
             {
@@ -72,6 +77,9 @@ public sealed class AuditingInterceptor(
         foreach (var property in entry.Properties)
         {
             var propertyName = property.Metadata.Name;
+            
+            if (ShouldIgnoreProperty(entityType, propertyName))
+                continue;
 
             switch (operation)
             {
@@ -159,5 +167,22 @@ public sealed class AuditingInterceptor(
         {
             return "system";
         }
+    }
+    
+    private bool ShouldIgnoreProperty(Type entityType, string propertyName)
+    {
+        if (ignoreConfiguration.ShouldIgnoreProperty(entityType, propertyName))
+            return true;
+
+        var propertyInfo = entityType.GetProperty(propertyName);
+        if (propertyInfo?.GetCustomAttribute<AuditIgnoreAttribute>() != null)
+            return true;
+
+        if (propertyInfo?.GetCustomAttributes<Attribute>()
+                .Any(attr => attr.GetType().Name.Contains("NotMapped") || 
+                             attr.GetType().Name.Contains("JsonIgnore")) == true)
+            return true;
+
+        return false;
     }
 }
