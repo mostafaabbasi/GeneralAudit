@@ -1,0 +1,16 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Seedwork.Auditing", "Seedwork.Auditing\Seedwork.Auditing.csproj", "{4D228125-1815-46AD-AA3B-90029F7ED617}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{4D228125-1815-46AD-AA3B-90029F7ED617}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4D228125-1815-46AD-AA3B-90029F7ED617}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4D228125-1815-46AD-AA3B-90029F7ED617}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4D228125-1815-46AD-AA3B-90029F7ED617}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
