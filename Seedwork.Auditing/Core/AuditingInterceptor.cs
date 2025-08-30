@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Reflection;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
@@ -10,122 +11,82 @@ using Seedwork.Auditing.Abstractions;
 
 namespace Seedwork.Auditing.Core;
 
-public sealed class AuditingInterceptor(
-    SchemaDetectionService schemaService,
+public class AuditingInterceptor(
     IAuditStore auditStore,
-    IServiceProvider serviceProvider,
-    AuditPropertyIgnoreConfiguration ignoreConfiguration)
-    : SaveChangesInterceptor
+    SchemaDetectionService schemaService,
+    AuditPropertyIgnoreConfiguration ignoreConfiguration,
+    IServiceProvider serviceProvider) : SaveChangesInterceptor
 {
     public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
         DbContextEventData eventData,
         InterceptionResult<int> result,
         CancellationToken cancellationToken = default)
     {
-        if (eventData.Context is null)
-            return result;
-        
-        var auditEntries = await CreateAuditEntries(eventData.Context);
-        
-        var groupedEntries = auditEntries.GroupBy(entry => 
-            AuditTableRegistry.GetSchema(entry.EntityType) ?? "dbo");
-        
-        foreach (var schemaGroup in groupedEntries)
+        if (eventData.Context is null) return result;
+
+        var context = eventData.Context;
+        var entries = context.ChangeTracker.Entries()
+            .Where(e => e is
+            {
+                Entity: IAuditableEntity,
+                State: EntityState.Added
+                or
+                EntityState.Modified
+                or
+                EntityState.Deleted
+            })
+            .ToList();
+
+        foreach (var entry in entries)
         {
-            await auditStore.SaveAuditEntriesAsync(
-                schemaGroup.AsEnumerable(), 
-                schemaGroup.Key,    
-                cancellationToken);
+            await HandleEntryAsync(entry, cancellationToken);
         }
-        
+
         return result;
     }
     
-    private async Task<List<AuditEntry>> CreateAuditEntries(DbContext context)
-    {
-        var auditEntries = new List<AuditEntry>();
-        var userId = GetCurrentUserId();
-        var userEmail = GetCurrentUserEmail();
-        
-        foreach (var entry in context.ChangeTracker.Entries())
-        {
-            if (entry.Entity is not IAuditableEntity ||
-                entry.State == EntityState.Unchanged)
-                continue;
-            
-            if (ignoreConfiguration.ShouldIgnoreEntity(entry.Entity))
-                continue;
-            
-            var auditEntry = CreateAuditEntryFromEntityEntry(entry, userId, userEmail);
-            if (auditEntry != null)
-            {
-                auditEntries.Add(auditEntry);
-            }
-        }
-        
-        return auditEntries;
-    }
-    
-    private AuditEntry? CreateAuditEntryFromEntityEntry(EntityEntry entry, string userId, string userEmail)
+    private async Task HandleEntryAsync(EntityEntry entry, CancellationToken cancellationToken)
     {
         var entityType = entry.Entity.GetType();
+    
+        var method = GetType()
+            .GetMethod(nameof(CreateAuditEntry), BindingFlags.NonPublic | BindingFlags.Instance)!
+            .MakeGenericMethod(entityType);
+
+        var audit = method.Invoke(this, [entry])!;
+
+        var auditEntryType = typeof(AuditEntry<>).MakeGenericType(entityType);
+        var listType = typeof(List<>).MakeGenericType(auditEntryType);
+        var list = (IList)Activator.CreateInstance(listType)!;
+        list.Add(audit);
+
+        var saveMethod = typeof(IAuditStore)
+            .GetMethod(nameof(IAuditStore.SaveAsync))!
+            .MakeGenericMethod(entityType);
+
+        await (Task)saveMethod.Invoke(auditStore, [list, cancellationToken])!;
+    }
+
+    private AuditEntry<TEntity> CreateAuditEntry<TEntity>(EntityEntry entry)
+        where TEntity : class, IAuditableEntity
+    {
+        var userId = GetCurrentUserId();
+        var userEmail = GetCurrentUserEmail();
         var entityId = GetEntityId(entry);
-        var operation = entry.State;
+        var entityInfo = schemaService.GetSchemaInfo(entry.Entity.GetType());
         
-        var changes = new Dictionary<string, PropertyChange>();
-        
-        foreach (var property in entry.Properties)
-        {
-            var propertyName = property.Metadata.Name;
-            
-            if (ShouldIgnoreProperty(entityType, propertyName))
-                continue;
-
-            switch (operation)
-            {
-                case EntityState.Added:
-                {
-                    if (property.CurrentValue != null)
-                    {
-                        changes[propertyName] = new PropertyChange(OldValue: null, NewValue: property.CurrentValue);
-                    }
-
-                    break;
-                }
-                case EntityState.Deleted:
-                {
-                    if (property.OriginalValue != null)
-                    {
-                        changes[propertyName] = new PropertyChange(property.OriginalValue, null);
-                    }
-
-                    break;
-                }
-                case EntityState.Modified when property.IsModified:
-                    changes[propertyName] = new PropertyChange(property.OriginalValue, property.CurrentValue);
-                    break;
-            }
-        }
-        
-        if (!changes.Any())
-            return null;
-
-        var serializedChanges = JsonConvert.SerializeObject(changes, Formatting.None);
-
-        var entityInfo = schemaService.GetSchemaInfo(entityType);
-        
-        var auditEntry = new AuditEntry
+        var audit = new AuditEntry<TEntity>
         {
             EntityType = $"{entityInfo.Schema}.{entityInfo.TableName}",
             EntityId = entityId,
-            Operation = operation,
             UserId = userId,
             UserEmail = userEmail,
             CreatedAt = DateTime.UtcNow,
-            Changes = serializedChanges.Trim(),
+            Operation = entry.State,
+            Changes = SerializeChanges(entry)
         };
-        
-        return auditEntry; 
+
+        return audit;
     }
     
     private string GetEntityId(EntityEntry entry)
@@ -140,7 +101,36 @@ public sealed class AuditingInterceptor(
         var keyValues = keyProperties.Select(p => p.CurrentValue?.ToString() ?? "null");
         return string.Join("|", keyValues);
     }
-    
+
+    private string SerializeChanges(EntityEntry entry)
+    {
+        var entityType = entry.Entity.GetType();
+        
+        var changes = entry.Properties
+            .Where(p =>
+            {
+                var propertyName = p.Metadata.Name;
+
+                if (ShouldIgnoreProperty(entityType, propertyName))
+                    return false;
+                
+                return p.IsModified ||
+                       entry.State == EntityState.Added ||
+                       entry.State == EntityState.Deleted;
+            })
+            .ToDictionary(
+                p => p.Metadata.Name,
+                p =>
+                {
+                    var oldValue = entry.State == EntityState.Added ? null : p.OriginalValue;
+                    var newValue = entry.State == EntityState.Deleted ? null : p.CurrentValue;
+
+                    return new PropertyChange(oldValue, newValue);
+                });
+
+        return JsonConvert.SerializeObject(changes, Formatting.None);;
+    }
+
     private string GetCurrentUserId()
     {
         try
@@ -154,7 +144,7 @@ public sealed class AuditingInterceptor(
             return "system";
         }
     }
-    
+
     private string GetCurrentUserEmail()
     {
         try

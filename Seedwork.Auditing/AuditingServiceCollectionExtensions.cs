@@ -11,7 +11,6 @@ public static class AuditingServiceCollectionExtensions
     {
         services.AddSingleton<SchemaDetectionService>();
         services.AddScoped<IAuditStore, SchemaAwareAuditStore>();
-        services.AddScoped<IAuditQueryService, AuditQueryService>();
         services.AddScoped<AuditingInterceptor>();
         
         var ignoreConfig = new AuditPropertyIgnoreConfiguration();

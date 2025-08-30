@@ -8,7 +8,11 @@ public static class AuditingModelBuilderExtensions
 {
     public static ModelBuilder EnableAuditing(this ModelBuilder modelBuilder)
     {
-        var auditableTypes = DiscoverAuditableTypes(modelBuilder);
+        var auditableTypes = modelBuilder.Model
+            .GetEntityTypes()
+            .Select(et => et.ClrType)
+            .Where(t => typeof(IAuditableEntity).IsAssignableFrom(t))
+            .ToList();
 
         foreach (var entityType in auditableTypes)
         {
@@ -18,41 +22,37 @@ public static class AuditingModelBuilderExtensions
         return modelBuilder;
     }
 
-    private static List<Type> DiscoverAuditableTypes(ModelBuilder modelBuilder)
-    {
-        var model = modelBuilder.Model;
-
-        return model.GetEntityTypes()
-            .Where(et => typeof(IAuditableEntity).IsAssignableFrom(et.ClrType))
-            .Select(et => et.ClrType)
-            .ToList();
-    }
-
     private static void ConfigureAuditTable(ModelBuilder modelBuilder, Type entityType)
     {
         var schemaService = new SchemaDetectionService();
         var schemaInfo = schemaService.GetSchemaInfo(entityType);
 
-        var auditTableName = $"{schemaInfo.TableName}_Audit";
+        var auditTableName = schemaInfo.TableName.ToAuditTableName();
 
-        modelBuilder.Entity<AuditEntry>(entity =>
+        var auditClr = typeof(AuditEntry<>).MakeGenericType(entityType);
+
+        modelBuilder.Entity(auditClr, builder =>
         {
-            entity.ToTable(auditTableName, schemaInfo.Schema);
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Id).ValueGeneratedOnAdd().IsRequired();
-            entity.Property(e => e.EntityType).HasMaxLength(250).IsRequired();
-            entity.Property(e => e.EntityId).HasMaxLength(128).IsRequired();
-            entity.Property(e => e.Operation)
+            builder.ToTable(auditTableName, schemaInfo.Schema);
+
+            builder.HasKey("Id");
+
+            builder.Property("Id").ValueGeneratedOnAdd();
+            builder.Property("EntityId").HasMaxLength(128).IsRequired();
+            builder.Property("UserId").HasMaxLength(20);
+            builder.Property("UserEmail").HasMaxLength(150);
+            builder.Property("Changes").HasColumnType("nvarchar(max)").IsRequired();
+            builder.Property("CreatedAt").IsRequired();
+
+            builder.Property("Operation")
                 .HasConversion(new EnumToStringConverter<EntityState>())
                 .HasMaxLength(50)
                 .IsRequired();
-            entity.Property(e => e.UserId).HasMaxLength(20).IsRequired();
-            entity.Property(e => e.UserEmail).HasMaxLength(150);
-            entity.Property(e => e.Changes).HasColumnType("nvarchar(max)").IsRequired();
 
-            entity.HasIndex(e => new { e.EntityId, e.CreatedAt, e.UserId, e.UserEmail });
+            builder.HasIndex("EntityId", "CreatedAt", "UserId", "UserEmail")
+                .HasDatabaseName($"IX_{auditTableName}_EntityId_CreatedAt_UserId_UserEmail");
         });
-
-        AuditTableRegistry.RegisterMapping(entityType, schemaInfo.Schema, auditTableName);
+        
+        AuditTableRegistry.RegisterMapping(entityType, schemaInfo.Schema, auditTableName!);
     }
 }
